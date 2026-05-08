@@ -1,0 +1,32 @@
+{
+    "$schema": "./node_modules/wrangler/config-schema.json",
+    "name": "death-game",
+    "main": "src/worker.ts",
+    "compatibility_date": "2026-05-05",
+    "d1_databases": [
+        {
+            "binding": "DB",
+            "database_name": "death-game-db",
+            "database_id": "bb232f85-f6f7-4566-813e-1f96e9748012"
+        }
+    ],
+    "durable_objects": {
+        "bindings": [
+            {
+                "name": "ROOM_HUB",
+                "class_name": "RoomHub"
+            }
+        ]
+    },
+    "migrations": [
+        {
+            "tag": "v1",
+            "new_sqlite_classes": [
+                "RoomHub"
+            ]
+        }
+    ],
+    "ai": {
+        "binding": "AI"
+    }
+}

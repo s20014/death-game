@@ -1,0 +1,31 @@
+{
+  "name": "death-game",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "wrangler dev",
+    "dev:node": "tsx watch src/server.ts",
+    "deploy": "wrangler deploy",
+    "start": "wrangler dev --remote",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260505.1",
+    "@types/node": "^25.6.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5",
+    "wrangler": "^4.87.0"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.0.1",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.12.16"
+  }
+}
