@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { api, type RoomDetail, type TurnView, type TurnResultView, type YesNoResultView } from '../lib/api';
 import { connectRoomWs, type WsEvent } from '../lib/ws';
 
@@ -376,6 +376,7 @@ function HistoryRow({ history }: { history: (TurnResultView | YesNoResultView | 
 // ---- Main ----
 export default function LogPage() {
   const { roomId } = useParams<{ roomId: string }>();
+  const navigate = useNavigate();
 
   const [room, setRoom] = useState<RoomDetail | null>(null);
   const [currentTurn, setCurrentTurn] = useState<TurnView | null>(null);
@@ -405,15 +406,18 @@ export default function LogPage() {
       if (['turn.started', 'turn.resolved', 'yesno.started', 'yesno.resolved', 'room.finished'].includes(event.type)) {
         void fetchState();
       }
+      if (event.type === 'room.reset') {
+        navigate(`/room/${roomId}/waiting`);
+      }
     });
     return disconnect;
-  }, [roomId, fetchState]);
+  }, [roomId, fetchState, navigate]);
 
   if (error) return (
     <div className="log-page" style={{ padding: 32 }}>
       <div className="log-overlay" />
       <div style={{ position: 'relative', zIndex: 1 }}>
-        <div className="brand">DEATH<span className="dot" />GAME</div>
+        <div className="brand">MINORITY<span className="dot" />MONEY</div>
         <p className="error-msg">{error}</p>
       </div>
     </div>
@@ -423,7 +427,7 @@ export default function LogPage() {
     <div className="log-page" style={{ padding: 32 }}>
       <div className="log-overlay" />
       <div style={{ position: 'relative', zIndex: 1 }}>
-        <div className="brand">DEATH<span className="dot" />GAME</div>
+        <div className="brand">MINORITY<span className="dot" />MONEY</div>
         <p className="kicker" style={{ marginTop: 16 }}>読み込み中…</p>
       </div>
     </div>

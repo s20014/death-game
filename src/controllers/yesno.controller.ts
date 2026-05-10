@@ -29,7 +29,7 @@ export async function handleTriggerYesNo(c: AppContext) {
   if (room.status === "finished") {
     return c.json({ error: "game already finished" }, 409);
   }
-  if (room.currentTurn?.phase === "selecting" || room.currentTurn?.phase === "resolving") {
+  if (["selecting", "first_selecting", "others_selecting"].includes(room.currentTurn?.phase ?? "")) {
     return c.json({ error: "a turn is already in progress" }, 409);
   }
 
@@ -162,7 +162,6 @@ export async function handleResolveYesNo(c: AppContext) {
     mode: "yesno",
     yesnoResult: result,
   };
-  if (turn.story !== undefined) historyEntry.story = turn.story;
   room.turnHistory.push(historyEntry);
 
   const aliveCount = room.players.filter((p) => p.alive).length;

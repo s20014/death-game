@@ -18,9 +18,10 @@ export type MoneyEffect = {
 export type Choice = {
   id: string;
   text: string;
-  riskLevel: RiskLevel;
-  mainEffect: MoneyEffect;
-  minorityBonus: MoneyEffect;
+  amount: number;
+  riskLevel?: RiskLevel;
+  mainEffect?: MoneyEffect;
+  minorityBonus?: MoneyEffect;
   resultStory?: { majority: string; minority: string };
 };
 
@@ -36,7 +37,7 @@ export type PlayerState = {
 // ---------- ルーム ----------
 
 export type RoomStatus = "waiting" | "in_progress" | "finished";
-export type TurnPhase = "selecting" | "resolving" | "resolved" | "first_selecting" | "others_selecting";
+export type TurnPhase = "selecting" | "resolved" | "first_selecting" | "others_selecting";
 export type TurnMode = "normal" | "yesno" | "story";
 
 export type InsideJokeConfig = {
@@ -55,23 +56,17 @@ export type RoomSettings = {
 
 // ---------- ストーリーモード ----------
 
-export type StoryScore = {
-  happy: number;
-  normal: number;
-  bad: number;
-};
+export type StoryEnding = "happy" | "betrayal" | "destruction" | "dictator";
 
 export type StoryFirstChoice = {
   id: string;
   text: string;
-  storyScore: StoryScore;
 };
 
 export type StoryOthersChoice = {
   id: string;
   text: string;
-  moneyEffect: MoneyEffect;
-  storyScore: StoryScore;
+  moneyEffect?: MoneyEffect;
 };
 
 export type StoryTurnDefinition = {
@@ -89,14 +84,17 @@ export type StoryTurnDefinition = {
 
 export type StoryProgress = {
   currentTurnIndex: number;
-  accumulatedScore: StoryScore;
-  ending?: "happy" | "normal" | "bad";
+  ending?: StoryEnding;
+  betrayerIds?: string[];
+  betrayerNames?: string[];
 };
 
 export type StoryTurnResult = {
   firstPlayerId: string;
   firstChoiceId: string;
-  addedScore: StoryScore;
+  ending: StoryEnding;
+  betrayerIds: string[];
+  betrayerNames: string[];
   applied: AppliedEffect[];
 };
 
@@ -130,7 +128,6 @@ export type TurnData = {
 export type TurnHistoryEntry = {
   turnNumber: number;
   mode: TurnMode;
-  story?: string;
   result?: TurnResult;
   yesnoResult?: YesNoEventResult;
   storyResult?: StoryTurnResult;

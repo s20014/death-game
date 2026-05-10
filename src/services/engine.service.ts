@@ -1,73 +1,16 @@
 import type {
   AppliedEffect,
-  MoneyEffect,
-  PlayerState,
   TurnInput,
   TurnResult,
   YesNoEventInput,
   YesNoEventResult,
 } from "../models/types.js";
 
-const DEFAULT_ALL_EQUAL_EVENT: MoneyEffect = {
-  type: "lose",
-  amount: 50_000,
-  description: "全選択肢同数イベント",
-};
-
 const YES_NO_RULE = {
   yesMajority: 100_000,
   yesMinority: 250_000,
   noAny: -150_000,
 } as const;
-
-function roundYen(value: number): number {
-  return Math.round(value);
-}
-
-export function getMinorityMultiplier(money: number): number {
-  if (money >= 500_000) return 1.0;
-  if (money >= 200_000) return 1.3;
-  return 1.6;
-}
-
-function scaleEffect(effect: MoneyEffect, multiplier: number): MoneyEffect {
-  const scaled: MoneyEffect = {
-    type: effect.type,
-    description: effect.description,
-  };
-  if (effect.direction !== undefined) scaled.direction = effect.direction;
-  if (effect.amount !== undefined) scaled.amount = roundYen(effect.amount * multiplier);
-  if (effect.rate !== undefined) scaled.rate = effect.rate * multiplier;
-  if (effect.minAmount !== undefined) scaled.minAmount = roundYen(effect.minAmount * multiplier);
-  if (effect.maxAmount !== undefined) scaled.maxAmount = roundYen(effect.maxAmount * multiplier);
-  return scaled;
-}
-
-function applyMoneyEffect(currentMoney: number, effect: MoneyEffect, rng: () => number): number {
-  switch (effect.type) {
-    case "gain":
-      return roundYen(effect.amount ?? 0);
-    case "lose":
-      return roundYen(-(effect.amount ?? 0));
-    case "event": {
-      const direction = effect.direction ?? "lose";
-      if (effect.amount !== undefined) {
-        return roundYen(direction === "gain" ? effect.amount : -effect.amount);
-      }
-      const raw = roundYen(currentMoney * (effect.rate ?? 0));
-      return direction === "gain" ? raw : -raw;
-    }
-    case "gamble": {
-      const min = effect.minAmount ?? effect.amount ?? 0;
-      const max = effect.maxAmount ?? effect.amount ?? min;
-      const lower = Math.min(min, max);
-      const upper = Math.max(min, max);
-      return roundYen(lower + (upper - lower) * rng());
-    }
-    default:
-      return 0;
-  }
-}
 
 function getSelectionOrThrow<T extends string>(
   selections: Record<string, T>,
@@ -90,47 +33,9 @@ function assertValidTurnInput(input: TurnInput): void {
   }
 }
 
-function applyToPlayer(
-  player: PlayerState,
-  selectedChoiceId: string,
-  mainEffect: MoneyEffect,
-  minorityBonus: MoneyEffect,
-  isMinority: boolean,
-  uniqueMinorityDouble: boolean,
-  rng: () => number,
-): AppliedEffect {
-  const moneyBefore = player.money;
-  const mainDelta = applyMoneyEffect(moneyBefore, mainEffect, rng);
-  let bonusDelta = 0;
-  let multiplierApplied = 0;
-  if (isMinority) {
-    multiplierApplied = getMinorityMultiplier(moneyBefore) * (uniqueMinorityDouble ? 2 : 1);
-    bonusDelta = applyMoneyEffect(
-      moneyBefore + mainDelta,
-      scaleEffect(minorityBonus, multiplierApplied),
-      rng,
-    );
-  }
-  const totalDelta = mainDelta + bonusDelta;
-  const moneyAfter = roundYen(moneyBefore + totalDelta);
-  return {
-    playerId: player.id,
-    playerName: player.name,
-    selectedChoiceId,
-    wasMinority: isMinority,
-    mainDelta,
-    bonusDelta,
-    totalDelta,
-    multiplierApplied,
-    moneyBefore,
-    moneyAfter,
-    bankrupt: moneyAfter <= 0,
-  };
-}
-
+// 最少得票の選択肢を選んだグループが賞金獲得。タイは全該当グループ。0票は除外。
 export function resolveTurn(input: TurnInput): TurnResult {
   assertValidTurnInput(input);
-  const rng = input.rng ?? Math.random;
   const activePlayers = input.players.filter((p) => p.alive);
 
   const counts: Record<string, number> = {};
@@ -140,53 +45,39 @@ export function resolveTurn(input: TurnInput): TurnResult {
     counts[sel] = (counts[sel] ?? 0) + 1;
   }
 
-  const countValues = Object.values(counts);
-  const allEqual = countValues.every((v) => v === countValues[0]);
-
-  if (allEqual) {
-    const ev = input.allChoicesEqualEvent ?? DEFAULT_ALL_EQUAL_EVENT;
-    return {
-      counts,
-      minorityChoiceIds: [],
-      allChoicesEqualApplied: true,
-      applied: activePlayers.map((p) => {
-        const moneyBefore = p.money;
-        const delta = applyMoneyEffect(moneyBefore, ev, rng);
-        const moneyAfter = roundYen(moneyBefore + delta);
-        return {
-          playerId: p.id,
-          playerName: p.name,
-          selectedChoiceId: getSelectionOrThrow(input.selections, p.id),
-          wasMinority: false,
-          mainDelta: delta,
-          bonusDelta: 0,
-          totalDelta: delta,
-          multiplierApplied: 0,
-          moneyBefore,
-          moneyAfter,
-          bankrupt: moneyAfter <= 0,
-        } satisfies AppliedEffect;
-      }),
-    };
+  const votedEntries = Object.entries(counts).filter(([, cnt]) => cnt > 0);
+  let winningChoiceIds: string[] = [];
+  if (votedEntries.length > 0) {
+    const minCount = Math.min(...votedEntries.map(([, cnt]) => cnt));
+    winningChoiceIds = votedEntries
+      .filter(([, cnt]) => cnt === minCount)
+      .map(([id]) => id);
   }
-
-  const minCount = Math.min(...countValues);
-  const minorityChoiceIds = Object.entries(counts)
-    .filter(([, cnt]) => cnt === minCount)
-    .map(([id]) => id);
 
   const choicesById = new Map(input.choices.map((c) => [c.id, c]));
   return {
     counts,
-    minorityChoiceIds,
+    minorityChoiceIds: winningChoiceIds,
     allChoicesEqualApplied: false,
     applied: activePlayers.map((p) => {
       const selectedChoiceId = getSelectionOrThrow(input.selections, p.id);
       const choice = choicesById.get(selectedChoiceId);
       if (!choice) throw new Error(`choice not found: ${selectedChoiceId}`);
-      const isMinority = minorityChoiceIds.includes(selectedChoiceId);
-      const uniqueDouble = isMinority && counts[selectedChoiceId] === 1;
-      return applyToPlayer(p, selectedChoiceId, choice.mainEffect, choice.minorityBonus, isMinority, uniqueDouble, rng);
+      const isWinner = winningChoiceIds.includes(selectedChoiceId);
+      const delta = isWinner ? (choice.amount ?? 0) : 0;
+      return {
+        playerId: p.id,
+        playerName: p.name,
+        selectedChoiceId,
+        wasMinority: isWinner,
+        mainDelta: delta,
+        bonusDelta: 0,
+        totalDelta: delta,
+        multiplierApplied: 0,
+        moneyBefore: p.money,
+        moneyAfter: p.money + delta,
+        bankrupt: false,
+      } satisfies AppliedEffect;
     }),
   };
 }

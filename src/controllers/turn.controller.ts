@@ -35,7 +35,7 @@ export async function handleStartTurn(c: AppContext) {
   if (room.status === "finished") {
     return c.json({ error: "game already finished" }, 409);
   }
-  if (room.currentTurn?.phase === "selecting" || room.currentTurn?.phase === "resolving") {
+  if (["selecting", "first_selecting", "others_selecting"].includes(room.currentTurn?.phase ?? "")) {
     return c.json({ error: "a turn is already in progress" }, 409);
   }
   if (!body.choices || body.choices.length !== 3) {
@@ -178,13 +178,11 @@ export async function handleResolveTurn(c: AppContext) {
     mode: "normal",
     result,
   };
-  if (turn.story !== undefined) historyEntry.story = turn.story;
   room.turnHistory.push(historyEntry);
 
   // ゲーム終了判定
-  const aliveCount = room.players.filter((p) => p.alive).length;
   const maxTurnsReached = turn.turnNumber >= room.settings.maxTurns;
-  if (aliveCount <= 1 || maxTurnsReached || room.finalizationMode) {
+  if (maxTurnsReached || room.finalizationMode) {
     room.status = "finished";
   }
 

@@ -11,13 +11,29 @@ import {
   type PlayerView,
   type StoryTurnView,
 } from '../lib/api';
+import { ENDING_DATA } from '../lib/storyEndings';
 import { loadSession } from '../lib/session';
 import { connectRoomWs, type WsEvent } from '../lib/ws';
 
 const LETTERS = ['A', 'B', 'C', 'D', 'E'];
 
+const STAKES_CONFIG = {
+  low:    { label: 'LOW',    amounts: [1000, 2000, 3000]   as const, color: 'var(--cobalt)' },
+  middle: { label: 'MIDDLE', amounts: [2000, 4000, 6000]   as const, color: 'var(--gold)' },
+  high:   { label: 'HIGH',   amounts: [3000, 6000, 10000]  as const, color: 'var(--red)' },
+} as const;
+type StakesLevel = keyof typeof STAKES_CONFIG;
+
 function fmt(n: number) {
   return '¥' + n.toLocaleString('ja-JP');
+}
+
+function buildChoicesForStakes(stakes: StakesLevel, turnNumber: number): ChoiceInput[] {
+  return STAKES_CONFIG[stakes].amounts.map((amount) => ({
+    id: `${stakes}-${amount}-${turnNumber}`,
+    text: '',
+    amount,
+  }));
 }
 
 function MoneyPanel({ money, delta, isYes = false }: { money: number; delta?: number; isYes?: boolean }) {
@@ -37,38 +53,12 @@ function MoneyPanel({ money, delta, isYes = false }: { money: number; delta?: nu
   );
 }
 
-function buildDefaultChoices(turnNumber: number): ChoiceInput[] {
-  return [
-    {
-      id: `safe-${turnNumber}`,
-      text: '堅実にバイトして稼ぐ',
-      riskLevel: 'low',
-      mainEffect: { type: 'gain', amount: 80000, description: '安定収入' },
-      minorityBonus: { type: 'gain', amount: 50000, description: '少数派ボーナス' },
-    },
-    {
-      id: `mid-${turnNumber}`,
-      text: '友人の副業に乗ってみる',
-      riskLevel: 'medium',
-      mainEffect: { type: 'gain', amount: 120000, description: '中リターン' },
-      minorityBonus: { type: 'gain', amount: 90000, description: '少数派ボーナス' },
-    },
-    {
-      id: `high-${turnNumber}`,
-      text: '一発逆転の怪しい投資に突撃',
-      riskLevel: 'high',
-      mainEffect: { type: 'lose', amount: 70000, description: '高リスク' },
-      minorityBonus: { type: 'gain', amount: 220000, description: '少数派大当たり' },
-    },
-  ];
-}
-
-function buildChoicesFromPreview(preview: GeneratedTurn, turnNumber: number): ChoiceInput[] {
-  const defaults = buildDefaultChoices(turnNumber);
+function buildChoicesFromPreview(preview: GeneratedTurn, stakes: StakesLevel, turnNumber: number): ChoiceInput[] {
+  const amounts = STAKES_CONFIG[stakes].amounts;
   return preview.choices.map((c, i) => ({
-    ...defaults[i]!,
-    id: c.id,
+    id: `${stakes}-${amounts[i] ?? 0}-${turnNumber}`,
     text: c.text,
+    amount: amounts[i] ?? 0,
     ...(c.resultStory ? { resultStory: c.resultStory } : {}),
   }));
 }
@@ -105,7 +95,12 @@ function VotingScreen({ turn, me, selected, onSelect, onConfirm, submitting, pb 
             <button key={c.id} className={`choice-card${isSel ? ' selected' : ''}`} onClick={() => onSelect(c.id)} disabled={submitting}>
               <div className="choice-letter">{LETTERS[idx] ?? String(idx + 1)}</div>
               <div>
-                <div className="choice-label">{c.text}</div>
+                {c.text && <div className="choice-label">{c.text}</div>}
+                {c.amount > 0 && (
+                  <div style={{ fontSize: 12, color: 'var(--green)', letterSpacing: '0.05em', marginTop: c.text ? 2 : 0, fontFamily: 'var(--font-display)' }}>
+                    +¥{c.amount.toLocaleString('ja-JP')}
+                  </div>
+                )}
               </div>
             </button>
           );
@@ -161,6 +156,10 @@ function ResultScreen({ turn, result, me, pb = 0 }: { turn: TurnView; result: Tu
   const myEffect = result.applied.find((a) => a.playerId === me.id);
   const isWin = myEffect?.wasMinority ?? false;
   const choices = turn.choices ?? [];
+  const myChoice = choices.find((c) => c.id === turn.mySelection);
+  const resultStoryText = myChoice?.resultStory
+    ? (isWin ? myChoice.resultStory.minority : myChoice.resultStory.majority)
+    : null;
 
   type DistItem = { letter: string; count: number; pct: number; mine: boolean };
   let distData: DistItem[] = [];
@@ -181,10 +180,10 @@ function ResultScreen({ turn, result, me, pb = 0 }: { turn: TurnView; result: Tu
       <div className={`result-panel ${isWin ? 'win' : 'lose'}`}>
         <div className="kicker" style={{ color: isWin ? 'var(--gold)' : 'var(--red)' }}>結 果</div>
         <div className="result-headline" style={{ color: isWin ? 'var(--gold)' : 'var(--red)', textShadow: isWin ? '0 0 28px rgba(240,192,64,0.5)' : '0 0 24px rgba(244,67,54,0.4)' }}>
-          {isWin ? '少数派' : '多数派'}
+          {isWin ? '賞金獲得' : '獲得なし'}
         </div>
         <div className="result-subline" style={{ color: isWin ? 'var(--gold-deep)' : 'rgba(244,67,54,0.85)' }}>
-          {isWin ? 'MINORITY · BONUS' : 'MAJORITY · PENALTY'}
+          {isWin ? 'MINORITY · WIN' : 'NO PAYOUT'}
         </div>
         {myEffect && (
           <div className="result-amount" style={{ color: isWin ? 'var(--gold)' : 'var(--red)' }}>
@@ -192,18 +191,11 @@ function ResultScreen({ turn, result, me, pb = 0 }: { turn: TurnView; result: Tu
           </div>
         )}
       </div>
-      {(() => {
-        const myChoice = choices.find((c) => c.id === turn.mySelection);
-        const story = myChoice?.resultStory
-          ? (isWin ? myChoice.resultStory.minority : myChoice.resultStory.majority)
-          : (!isWin ? '群れに紛れた者に、勝者の席は無い。' : null);
-        if (!story) return null;
-        return (
-          <div style={{ marginTop: 10, padding: '10px 12px', background: isWin ? 'rgba(240,192,64,0.06)' : 'rgba(244,67,54,0.06)', border: `1px dashed ${isWin ? 'rgba(240,192,64,0.4)' : 'rgba(244,67,54,0.4)'}`, borderRadius: 4, fontSize: 11.5, color: isWin ? 'rgba(240,210,120,0.9)' : 'rgba(255,200,200,0.9)', letterSpacing: '0.05em', fontFamily: 'var(--font-display)', lineHeight: 1.7, textAlign: 'center' }}>
-            {story}
-          </div>
-        );
-      })()}
+      {resultStoryText && (
+        <div style={{ marginTop: 10, padding: '10px 14px', background: isWin ? 'rgba(240,192,64,0.07)' : 'rgba(244,67,54,0.07)', border: `1px dashed ${isWin ? 'rgba(240,192,64,0.4)' : 'rgba(244,67,54,0.4)'}`, borderRadius: 4, fontSize: 12, color: isWin ? 'rgba(240,210,120,0.95)' : 'rgba(255,200,200,0.9)', lineHeight: 1.8, letterSpacing: '0.03em' }}>
+          {resultStoryText}
+        </div>
+      )}
       {distData.length > 0 && (
         <div className="dist-card">
           <div className="kicker">投票分布</div>
@@ -344,7 +336,7 @@ function StoryFirstScreen({ turn, me, storyTurn, onSelect, submitting, pb = 0 }:
             onClick={() => setSelected(c.id)}
             disabled={submitting}
           >
-            <div style={{ flex: 1 }}><div className="choice-label">{c.text}</div></div>
+            <div style={{ gridColumn: '1 / -1' }}><div className="choice-label">{c.text}</div></div>
           </button>
         ))}
       </div>
@@ -423,7 +415,7 @@ function StoryOthersScreen({ turn, me, storyTurn, onSelect, submitting, pb = 0 }
             onClick={() => setSelected(c.id)}
             disabled={submitting}
           >
-            <div style={{ flex: 1 }}>
+            <div style={{ gridColumn: '1 / -1' }}>
               <div className="choice-label">{c.text}</div>
               {c.moneyEffect && (
                 <div className="choice-effects">
@@ -450,23 +442,25 @@ function StoryOthersScreen({ turn, me, storyTurn, onSelect, submitting, pb = 0 }
 
 function StoryResolvedScreen({ me, storyTurn, pb = 0 }: { me: PlayerView; storyTurn: StoryTurnView; pb?: number }) {
   const result = storyTurn.storyResult;
-  const myEffect = result?.applied.find((a) => a.playerId === me.id);
+  const ending = result?.ending;
+  const data = ending ? ENDING_DATA[ending] : null;
+  const bodyText = data?.body(result?.betrayerNames ?? []) ?? '';
 
   return (
     <div className="page-content" style={pb ? { paddingBottom: pb } : undefined}>
-      <MoneyPanel money={myEffect?.moneyAfter ?? me.money} delta={myEffect?.totalDelta} />
-      <div className="result-panel" style={{ borderColor: 'rgba(240,192,64,0.4)' }}>
-        <div className="kicker" style={{ color: 'var(--gold)' }}>ストーリー結果</div>
-        {myEffect && (
-          <div className="result-amount" style={{ color: myEffect.totalDelta >= 0 ? 'var(--green)' : 'var(--red)' }}>
-            {myEffect.totalDelta >= 0 ? '+' : '−'}¥{Math.abs(myEffect.totalDelta).toLocaleString('ja-JP')}
+      <MoneyPanel money={me.money} />
+      {data && (
+        <div className="result-panel" style={{ borderColor: data.color, gap: 8 }}>
+          <div className="kicker" style={{ color: data.color }}>ENDING</div>
+          <div className="result-headline" style={{ color: data.color, fontSize: 18, textShadow: `0 0 24px ${data.color}88` }}>
+            {data.title}
           </div>
-        )}
-        {!myEffect && <div style={{ marginTop: 8, fontSize: 13, color: 'var(--ink-mute)' }}>影響なし</div>}
-        {myEffect?.bankrupt && (
-          <div style={{ marginTop: 8, fontSize: 12, color: 'var(--red)', letterSpacing: '0.2em' }}>BANKRUPT</div>
-        )}
-      </div>
+          <div style={{ fontSize: 11, color: data.color, opacity: 0.7, letterSpacing: '0.15em' }}>{data.sub(result?.betrayerNames ?? [])}</div>
+          <div style={{ marginTop: 12, fontSize: 12, color: 'var(--ink-mute)', lineHeight: 1.9, whiteSpace: 'pre-line', textAlign: 'left' }}>
+            {bodyText}
+          </div>
+        </div>
+      )}
       <div style={{ flex: 1 }} />
     </div>
   );
@@ -486,6 +480,9 @@ function GmPanel({
   onGenerate,
   onStartWithPreview,
   onStartStoryTurn,
+  stakes,
+  onStakesChange,
+  onStartDefaultTurn,
 }: {
   room: RoomDetail;
   turn: TurnView | null;
@@ -498,6 +495,9 @@ function GmPanel({
   onGenerate: () => void;
   onStartWithPreview: () => void;
   onStartStoryTurn: () => void;
+  stakes: StakesLevel;
+  onStakesChange: (s: StakesLevel) => void;
+  onStartDefaultTurn: () => void;
 }) {
   const phase = turn?.phase;
   const mode = turn?.mode;
@@ -533,8 +533,35 @@ function GmPanel({
         <div className="gm-panel-actions">
           {(!turn || phase === 'resolved') && room.status !== 'finished' && !preview && (
             <>
+              <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 6 }}>
+                {(Object.keys(STAKES_CONFIG) as StakesLevel[]).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    style={{
+                      flex: 1, padding: '6px 4px', fontSize: 10, letterSpacing: '0.15em',
+                      fontFamily: 'var(--font-display)',
+                      border: stakes === s ? `2px solid ${STAKES_CONFIG[s].color}` : '2px solid rgba(255,255,255,0.15)',
+                      background: stakes === s ? `${STAKES_CONFIG[s].color}22` : 'transparent',
+                      color: stakes === s ? STAKES_CONFIG[s].color : 'var(--ink-mute)',
+                      cursor: 'pointer', borderRadius: 2,
+                    }}
+                    onClick={() => onStakesChange(s)}
+                  >
+                    {STAKES_CONFIG[s].label}
+                  </button>
+                ))}
+              </div>
               <button
                 className="btn primary"
+                style={{ fontSize: 12, padding: '10px 8px' }}
+                disabled={working}
+                onClick={onStartDefaultTurn}
+              >
+                ターン開始 →
+              </button>
+              <button
+                className="btn"
                 style={{ fontSize: 12, padding: '10px 8px' }}
                 disabled={working || generating}
                 onClick={onGenerate}
@@ -605,15 +632,18 @@ function GmPanel({
             <>
               <div style={{ gridColumn: '1 / -1', fontSize: 11, color: 'var(--ink-mute)', padding: '4px 0', letterSpacing: '0.05em' }}>
                 1位: <span style={{ color: 'var(--gold)' }}>{turn?.storyGm?.firstPlayerName ?? '?'}</span>
-                {' · '}{turn?.storyGm?.firstSelectionSubmitted ? '選択済' : '選択待ち'}
+                {' · '}{turn?.storyGm?.firstSelectionSubmitted
+                  ? (turn.storyGm?.firstChoiceId === 'monopolize' ? '独り占めを選択' : '分けるを選択')
+                  : '選択待ち'}
               </div>
               <button
                 className="btn primary"
-                style={{ gridColumn: '1 / -1', fontSize: 12, padding: '10px 8px' }}
+                style={{ gridColumn: '1 / -1', fontSize: 12, padding: '10px 8px',
+                  ...(turn?.storyGm?.firstChoiceId === 'monopolize' ? { background: '#c0a020', borderColor: '#c0a020' } : {}) }}
                 disabled={working || !turn?.storyGm?.firstSelectionSubmitted}
                 onClick={() => onAct(() => api.advanceToOthers(room.id, room.gmPlayerId))}
               >
-                次のフェーズへ進む →
+                {turn?.storyGm?.firstChoiceId === 'monopolize' ? '独裁エンド確定 →' : '次のフェーズへ進む →'}
               </button>
             </>
           )}
@@ -659,6 +689,18 @@ function GmPanel({
           >
             決着 {room.finalizationMode ? 'OFF' : 'ON'}
           </button>
+          <button
+            className="btn"
+            style={{ fontSize: 11, padding: '8px 4px', gridColumn: '1 / -1' }}
+            disabled={working}
+            onClick={() => {
+              if (window.confirm('ルームをリセットして待機画面に戻りますか？\n（全員の所持金がリセットされます）')) {
+                void onAct(() => api.resetRoom(room.id, room.gmPlayerId));
+              }
+            }}
+          >
+            ホームに戻る
+          </button>
         </div>
       </div>
     </div>
@@ -681,6 +723,7 @@ export default function GmGamePage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [preview, setPreview] = useState<GeneratedTurn | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [stakes, setStakes] = useState<StakesLevel>('middle');
 
   const fetchState = useCallback(async () => {
     if (!roomId || !session?.playerId) return;
@@ -701,7 +744,6 @@ export default function GmGamePage() {
           }
         : null;
       setCurrentTurn(merged);
-      if (playerData.room.status === 'finished') navigate(`/room/${roomId}/log`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'エラーが発生しました');
     }
@@ -723,6 +765,9 @@ export default function GmGamePage() {
       ].includes(event.type)) {
         setSelected(null);
         void fetchState();
+      }
+      if (event.type === 'room.reset') {
+        navigate(`/room/${roomId}/waiting`);
       }
     });
     return disconnect;
@@ -785,10 +830,17 @@ export default function GmGamePage() {
     }
   }
 
+  async function startDefaultTurn() {
+    if (!roomId || !session?.playerId) return;
+    const nextTurnNumber = (currentTurn?.turnNumber ?? 0) + 1;
+    const choices = buildChoicesForStakes(stakes, nextTurnNumber);
+    await act(() => api.startTurn(roomId, session!.playerId, choices));
+  }
+
   async function startWithPreview() {
     if (!preview || !roomId || !session?.playerId) return;
     const nextTurnNumber = (currentTurn?.turnNumber ?? 0) + 1;
-    const choices = buildChoicesFromPreview(preview, nextTurnNumber);
+    const choices = buildChoicesFromPreview(preview, stakes, nextTurnNumber);
     await act(() => api.startTurn(roomId, session!.playerId, choices, preview.story));
     setPreview(null);
   }
@@ -834,16 +886,19 @@ export default function GmGamePage() {
       onGenerate={() => { void generateTurn(); }}
       onStartWithPreview={() => { void startWithPreview(); }}
       onStartStoryTurn={() => { void startStoryTurn(); }}
+      stakes={stakes}
+      onStakesChange={setStakes}
+      onStartDefaultTurn={() => { void startDefaultTurn(); }}
     />
   ) : null;
 
-  const GM_PB = 160;
+  const GM_PB = 220;
 
   if (error) return (
     <div className="page">
       <div className="appbar" style={{ paddingTop: 18 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div className="brand">DEATH<span className="dot" />GAME</div>
+          <div className="brand">MINORITY<span className="dot" />MONEY</div>
           <span className="tag gold" style={{ fontSize: 9, padding: '2px 6px' }}>GM</span>
         </div>
       </div>
@@ -856,7 +911,7 @@ export default function GmGamePage() {
     <div className="page">
       <div className="appbar" style={{ paddingTop: 18 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div className="brand">DEATH<span className="dot" />GAME</div>
+          <div className="brand">MINORITY<span className="dot" />MONEY</div>
           <span className="tag gold" style={{ fontSize: 9, padding: '2px 6px' }}>GM</span>
         </div>
       </div>
@@ -870,7 +925,7 @@ export default function GmGamePage() {
   const gmBar = (label: string) => (
     <div className="appbar" style={{ paddingTop: 18 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div className="brand">DEATH<span className="dot" />GAME</div>
+        <div className="brand">MINORITY<span className="dot" />MONEY</div>
         <span className="tag gold" style={{ fontSize: 9, padding: '2px 6px' }}>GM</span>
       </div>
       <div className="meta">{label}</div>
@@ -917,7 +972,7 @@ export default function GmGamePage() {
       <div className="page" style={{ background: 'radial-gradient(ellipse at 50% 20%, rgba(255,210,80,1), #e6b020 70%, #b8860b)' }}>
         <div className="appbar" style={{ paddingTop: 18 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontFamily: 'var(--font-display)', fontSize: 17, letterSpacing: '0.36em', color: '#1a1a2e' }}>
-            DEATH<span style={{ display: 'inline-block', width: 6, height: 6, background: '#1a1a2e', borderRadius: '50%', margin: '0 8px 2px', verticalAlign: 'middle' }} />GAME
+            MINORITY<span style={{ display: 'inline-block', width: 6, height: 6, background: '#1a1a2e', borderRadius: '50%', margin: '0 8px 2px', verticalAlign: 'middle' }} />MONEY
             <span style={{ fontFamily: 'var(--font-ui)', fontSize: 9, letterSpacing: '0.2em', background: '#1a1a2e', color: '#f0c040', padding: '2px 6px', marginLeft: 4 }}>GM</span>
           </div>
           <div className="meta" style={{ color: 'rgba(26,26,46,0.65)' }}>EVENT · {turnLabel}</div>

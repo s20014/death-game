@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { saveSession } from '../lib/session';
 
 export default function JoinRoomPage() {
   const navigate = useNavigate();
-  const [roomId, setRoomId] = useState('');
+  const [searchParams] = useSearchParams();
+  const [roomId, setRoomId] = useState(searchParams.get('roomId') ?? '');
   const [name, setName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -29,7 +30,7 @@ export default function JoinRoomPage() {
   return (
     <div className="page">
       <div className="appbar" style={{ paddingTop: 18 }}>
-        <div className="brand">DEATH<span className="dot" />GAME</div>
+        <div className="brand">MINORITY<span className="dot" />MONEY</div>
       </div>
 
       <div style={{ padding: '0 22px', marginBottom: 20 }}>

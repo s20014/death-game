@@ -3,7 +3,7 @@ import type { AppBindings } from "../bindings.js";
 import { getRoom, saveRoom } from "../models/room.store.js";
 import { publishRoomEvent } from "../durable/roomHub.client.js";
 import { SCENARIO } from "../story/scenarios/index.js";
-import type { StoryScore, StoryTurnData, TurnData, TurnHistoryEntry } from "../models/types.js";
+import type { StoryEnding, StoryTurnData, StoryTurnResult, TurnData, TurnHistoryEntry } from "../models/types.js";
 
 type AppContext = Context<{ Bindings: AppBindings }>;
 
@@ -11,14 +11,26 @@ function requireParam(c: AppContext, name: string): string | null {
   return c.req.param(name) ?? null;
 }
 
-function addScores(a: StoryScore, b: StoryScore): StoryScore {
-  return { happy: a.happy + b.happy, normal: a.normal + b.normal, bad: a.bad + b.bad };
-}
-
-function computeEnding(score: StoryScore): "happy" | "normal" | "bad" {
-  if (score.happy > score.normal && score.happy > score.bad) return "happy";
-  if (score.bad > score.normal && score.bad > score.happy) return "bad";
-  return "normal";
+function computeEnding(
+  othersSelections: Record<string, string>,
+  alivePlayers: { id: string; name: string }[],
+): { ending: StoryEnding; betrayerIds: string[]; betrayerNames: string[] } {
+  const defectors = alivePlayers.filter((p) => othersSelections[p.id] === "defect");
+  if (defectors.length === 0) {
+    return { ending: "happy", betrayerIds: [], betrayerNames: [] };
+  }
+  if (defectors.length === 1) {
+    return {
+      ending: "betrayal",
+      betrayerIds: [defectors[0]!.id],
+      betrayerNames: [defectors[0]!.name],
+    };
+  }
+  return {
+    ending: "destruction",
+    betrayerIds: defectors.map((p) => p.id),
+    betrayerNames: defectors.map((p) => p.name),
+  };
 }
 
 /**
@@ -33,15 +45,14 @@ export async function handleStartStoryTurn(c: AppContext) {
   const room = await getRoom(roomId, c.env.DB);
   if (!room) return c.json({ error: "room not found" }, 404);
   if (body.gmPlayerId !== room.gmPlayerId) return c.json({ error: "forbidden: gm only" }, 403);
-  if (room.currentTurn?.phase === "first_selecting" || room.currentTurn?.phase === "others_selecting") {
-    return c.json({ error: "a story turn is already in progress" }, 409);
+  if (["selecting", "first_selecting", "others_selecting"].includes(room.currentTurn?.phase ?? "")) {
+    return c.json({ error: "a turn is already in progress" }, 409);
   }
 
-  const progress = room.storyProgress ?? { currentTurnIndex: 0, accumulatedScore: { happy: 0, normal: 0, bad: 0 } };
+  const progress = room.storyProgress ?? { currentTurnIndex: 0 };
   const turnDef = SCENARIO[progress.currentTurnIndex];
   if (!turnDef) return c.json({ error: "no more story turns" }, 409);
 
-  // 1位プレイヤーを決定（所持金最大の生存者）
   const alivePlayers = room.players.filter((p) => p.alive);
   const firstPlayer = [...alivePlayers].sort((a, b) => b.money - a.money)[0];
   if (!firstPlayer) return c.json({ error: "no alive players" }, 409);
@@ -117,18 +128,19 @@ export async function handleSubmitFirstSelection(c: AppContext) {
       type: "story.first.submitted",
       roomId,
       at: new Date().toISOString(),
-      payload: { playerId: body.playerId },
+      payload: { playerId: body.playerId, choiceId: body.choiceId },
     });
   } catch (err) {
     console.error("failed to publish story.first.submitted", err);
   }
 
-  return c.json({ submitted: true });
+  return c.json({ submitted: true, choiceId: body.choiceId });
 }
 
 /**
  * POST /rooms/:roomId/turns/story/advance
- * GMが others_selecting フェーズへ進める
+ * GMが次フェーズへ進める。
+ * 1位が「独り占め」を選んだ場合はそのまま resolved（独裁エンド）に確定する。
  */
 export async function handleAdvanceToOthers(c: AppContext) {
   const roomId = requireParam(c, "roomId");
@@ -142,10 +154,54 @@ export async function handleAdvanceToOthers(c: AppContext) {
     return c.json({ error: "not in first_selecting phase" }, 409);
   }
 
-  const storyData = room.currentTurn.storyData!;
+  const turn = room.currentTurn;
+  const storyData = turn.storyData!;
   if (!storyData.firstSelection) return c.json({ error: "first player has not submitted yet" }, 409);
 
-  room.currentTurn.phase = "others_selecting";
+  // 独り占め → 即終了（独裁エンド）
+  if (storyData.firstSelection === "monopolize") {
+    const storyResult: StoryTurnResult = {
+      firstPlayerId: storyData.firstPlayerId,
+      firstChoiceId: "monopolize",
+      ending: "dictator",
+      betrayerIds: [storyData.firstPlayerId],
+      betrayerNames: [room.players.find((p) => p.id === storyData.firstPlayerId)?.name ?? '？'],
+      applied: [],
+    };
+    storyData.storyResult = storyResult;
+    turn.phase = "resolved";
+    turn.resolvedAt = new Date();
+
+    const progress = room.storyProgress!;
+    progress.currentTurnIndex += 1;
+    progress.ending = "dictator";
+    room.storyProgress = progress;
+
+    const historyEntry: TurnHistoryEntry = {
+      turnNumber: turn.turnNumber,
+      mode: "story",
+      storyResult,
+    };
+    room.turnHistory.push(historyEntry);
+
+    await saveRoom(room, c.env.DB);
+
+    try {
+      await publishRoomEvent(c.env, {
+        type: "story.turn.resolved",
+        roomId,
+        at: new Date().toISOString(),
+        payload: { turnNumber: turn.turnNumber, ending: "dictator" },
+      });
+    } catch (err) {
+      console.error("failed to publish story.turn.resolved (dictator)", err);
+    }
+
+    return c.json({ phase: "resolved", ending: "dictator" });
+  }
+
+  // 分ける → others_selecting へ
+  turn.phase = "others_selecting";
   await saveRoom(room, c.env.DB);
 
   const progress = room.storyProgress!;
@@ -222,7 +278,7 @@ export async function handleSubmitOthersSelection(c: AppContext) {
 
 /**
  * POST /rooms/:roomId/turns/story/resolve
- * GMがターンを解決する
+ * GMがターンを解決する（happy / betrayal / destruction）
  */
 export async function handleResolveStoryTurn(c: AppContext) {
   const roomId = requireParam(c, "roomId");
@@ -239,69 +295,35 @@ export async function handleResolveStoryTurn(c: AppContext) {
   const turn = room.currentTurn;
   const storyData = turn.storyData!;
   const progress = room.storyProgress!;
-  const turnDef = SCENARIO[progress.currentTurnIndex]!;
-  const firstChoiceId = storyData.firstSelection!;
-  const othersScene = turnDef.othersScenes[firstChoiceId]!;
 
-  // お金の効果を適用
-  const applied = room.players
-    .filter((p) => p.alive && p.id !== storyData.firstPlayerId)
-    .map((p) => {
-      const choiceId = storyData.othersSelections[p.id];
-      const choice = choiceId ? othersScene.choices.find((c) => c.id === choiceId) : null;
-      const effect = choice?.moneyEffect;
-      const moneyBefore = p.money;
-      let delta = 0;
-      if (effect) {
-        if (effect.type === "gain") delta = effect.amount ?? 0;
-        else if (effect.type === "lose") delta = -(effect.amount ?? 0);
-      }
-      const moneyAfter = moneyBefore + delta;
-      p.money = moneyAfter;
-      p.alive = moneyAfter > 0;
-      return {
-        playerId: p.id,
-        playerName: p.name,
-        selectedChoiceId: choiceId ?? "",
-        wasMinority: false,
-        mainDelta: delta,
-        bonusDelta: 0,
-        totalDelta: delta,
-        multiplierApplied: 0,
-        moneyBefore,
-        moneyAfter,
-        bankrupt: moneyAfter <= 0,
-      };
-    });
+  const alivePlayers = room.players.filter((p) => p.alive && p.id !== storyData.firstPlayerId);
+  const { ending, betrayerIds, betrayerNames } = computeEnding(storyData.othersSelections, alivePlayers);
 
-  // ストーリースコア集計
-  const firstChoice = turnDef.firstScene.choices.find((c) => c.id === firstChoiceId);
-  let addedScore: StoryScore = { happy: 0, normal: 0, bad: 0 };
-  if (firstChoice) addedScore = addScores(addedScore, firstChoice.storyScore);
-  for (const [pid, cid] of Object.entries(storyData.othersSelections)) {
-    void pid;
-    const choice = othersScene.choices.find((c) => c.id === cid);
-    if (choice) addedScore = addScores(addedScore, choice.storyScore);
-  }
-
-  const newAccumulated = addScores(progress.accumulatedScore, addedScore);
-  progress.accumulatedScore = newAccumulated;
-  progress.currentTurnIndex += 1;
-
-  const isLastTurn = progress.currentTurnIndex >= SCENARIO.length;
-  if (isLastTurn) progress.ending = computeEnding(newAccumulated);
-
-  storyData.storyResult = { firstPlayerId: storyData.firstPlayerId, firstChoiceId, addedScore, applied };
+  const storyResult: StoryTurnResult = {
+    firstPlayerId: storyData.firstPlayerId,
+    firstChoiceId: storyData.firstSelection!,
+    ending,
+    betrayerIds,
+    betrayerNames,
+    applied: [],
+  };
+  storyData.storyResult = storyResult;
   turn.phase = "resolved";
   turn.resolvedAt = new Date();
+
+  progress.currentTurnIndex += 1;
+  progress.ending = ending;
+  if (betrayerIds.length > 0) {
+    progress.betrayerIds = betrayerIds;
+    progress.betrayerNames = betrayerNames;
+  }
   room.storyProgress = progress;
 
   const historyEntry: TurnHistoryEntry = {
     turnNumber: turn.turnNumber,
     mode: "story",
-    storyResult: storyData.storyResult,
+    storyResult,
   };
-  if (turn.story !== undefined) historyEntry.story = turn.story;
   room.turnHistory.push(historyEntry);
 
   await saveRoom(room, c.env.DB);
@@ -311,18 +333,11 @@ export async function handleResolveStoryTurn(c: AppContext) {
       type: "story.turn.resolved",
       roomId,
       at: new Date().toISOString(),
-      payload: {
-        turnNumber: turn.turnNumber,
-        ending: progress.ending ?? null,
-        addedScore,
-      },
+      payload: { turnNumber: turn.turnNumber, ending, betrayerNames },
     });
   } catch (err) {
     console.error("failed to publish story.turn.resolved", err);
   }
 
-  return c.json({
-    storyResult: storyData.storyResult,
-    storyProgress: progress,
-  });
+  return c.json({ storyResult, storyProgress: progress });
 }

@@ -1,8 +1,8 @@
 import type { Context } from "hono";
-import { createRoom, getRoom, joinRoom } from "../models/room.store.js";
+import { createRoom, getRoom, joinRoom, saveRoom } from "../models/room.store.js";
 import type { CreateRoomInput } from "../models/room.store.js";
 import type { AppBindings } from "../bindings.js";
-import { connectRoomHub } from "../durable/roomHub.client.js";
+import { connectRoomHub, publishRoomEvent } from "../durable/roomHub.client.js";
 import { toRoomDetail, toRoomSummary, toTurnResultView, toYesNoResultView } from "../views/room.view.js";
 import { SCENARIO } from "../story/scenarios/index.js";
 
@@ -28,7 +28,13 @@ export async function handleCreateRoom(c: AppContext) {
   }
 
   const input: CreateRoomInput = { gmPlayerName: body.gmPlayerName.trim() };
-  if (body.settings !== undefined) input.settings = body.settings;
+  if (body.settings !== undefined) {
+    const maxTurns = body.settings.maxTurns;
+    if (maxTurns !== undefined && (maxTurns < 1 || maxTurns > 10 || !Number.isInteger(maxTurns))) {
+      return c.json({ error: "maxTurns must be an integer between 1 and 10" }, 400);
+    }
+    input.settings = body.settings;
+  }
 
   const room = await createRoom(input, c.env.DB);
   return c.json(
@@ -129,7 +135,7 @@ export async function handlePlayerState(c: AppContext) {
         choices = othersScene?.choices.map((c) => ({
           id: c.id,
           text: c.text,
-          moneyEffect: c.moneyEffect,
+          ...(c.moneyEffect !== undefined ? { moneyEffect: c.moneyEffect } : {}),
         }));
         mySelection = storyData?.othersSelections[playerId];
       }
@@ -159,7 +165,7 @@ export async function handlePlayerState(c: AppContext) {
             ? turn.choices.map((choice) => ({
                 id: choice.id,
                 text: choice.text,
-                riskLevel: choice.riskLevel,
+                amount: choice.amount ?? 0,
                 ...(choice.resultStory ? { resultStory: choice.resultStory } : {}),
               }))
             : undefined,
@@ -225,7 +231,7 @@ export async function handleGmState(c: AppContext) {
         choices: room.currentTurn.choices.map((choice) => ({
           id: choice.id,
           text: choice.text,
-          riskLevel: choice.riskLevel,
+          amount: choice.amount ?? 0,
           ...(choice.resultStory ? { resultStory: choice.resultStory } : {}),
         })),
         counts,
@@ -246,6 +252,7 @@ export async function handleGmState(c: AppContext) {
           firstPlayerId: storyData?.firstPlayerId ?? "",
           firstPlayerName: room.players.find((p) => p.id === storyData?.firstPlayerId)?.name ?? "",
           firstSelectionSubmitted: !!storyData?.firstSelection,
+          firstChoiceId: storyData?.firstSelection ?? null,
           othersAliveCount: othersAlive.length,
           othersSubmittedCount: othersSubmitted.length,
         },
@@ -316,4 +323,43 @@ export async function handleLogState(c: AppContext) {
       : null,
     recentHistory,
   });
+}
+
+/**
+ * POST /rooms/:roomId/reset
+ * GMがルームを待機状態にリセット（全員が待機画面に戻る）
+ */
+export async function handleResetRoom(c: AppContext) {
+  const roomId = requireParam(c, "roomId");
+  if (!roomId) return c.json({ error: "roomId is required" }, 400);
+
+  const body = await c.req.json<{ gmPlayerId: string }>();
+  const room = await getRoom(roomId, c.env.DB);
+  if (!room) return c.json({ error: "room not found" }, 404);
+  if (room.gmPlayerId !== body.gmPlayerId) return c.json({ error: "forbidden: gm only" }, 403);
+
+  room.status = "waiting";
+  delete room.currentTurn;
+  room.turnHistory = [];
+  delete room.storyProgress;
+  room.finalizationMode = false;
+  for (const p of room.players) {
+    p.money = 0;
+    p.alive = true;
+  }
+
+  await saveRoom(room, c.env.DB);
+
+  try {
+    await publishRoomEvent(c.env, {
+      type: "room.reset",
+      roomId,
+      at: new Date().toISOString(),
+      payload: {},
+    });
+  } catch (err) {
+    console.error("failed to publish room.reset", err);
+  }
+
+  return c.json({ message: "room reset" });
 }

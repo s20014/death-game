@@ -45,24 +45,14 @@ export type RoomDetail = RoomSummary & {
 export type ChoiceView = {
   id: string;
   text: string;
-  riskLevel: string;
+  amount: number;
   resultStory?: { majority: string; minority: string };
 };
 
 export type ChoiceInput = {
   id: string;
   text: string;
-  riskLevel: 'low' | 'medium' | 'high';
-  mainEffect: {
-    type: 'gain' | 'lose' | 'gamble' | 'event';
-    amount?: number;
-    description: string;
-  };
-  minorityBonus: {
-    type: 'gain' | 'lose' | 'gamble' | 'event';
-    amount?: number;
-    description: string;
-  };
+  amount: number;
   resultStory?: { majority: string; minority: string };
 };
 
@@ -126,6 +116,8 @@ export type StoryChoiceView = {
   moneyEffect?: { type: string; amount?: number; description: string };
 };
 
+export type StoryEnding = 'happy' | 'betrayal' | 'destruction' | 'dictator';
+
 export type StoryTurnView = {
   isFirstPlayer: boolean;
   firstPlayerId: string;
@@ -135,7 +127,9 @@ export type StoryTurnView = {
   storyResult?: {
     firstPlayerId: string;
     firstChoiceId: string;
-    addedScore: { happy: number; normal: number; bad: number };
+    ending: StoryEnding;
+    betrayerIds: string[];
+    betrayerNames: string[];
     applied: Array<{
       playerId: string;
       playerName: string;
@@ -153,6 +147,7 @@ export type StoryGmView = {
   firstPlayerId: string;
   firstPlayerName: string;
   firstSelectionSubmitted: boolean;
+  firstChoiceId: string | null;
   othersAliveCount: number;
   othersSubmittedCount: number;
 };
@@ -160,8 +155,8 @@ export type StoryGmView = {
 // ---- API ----
 
 export const api = {
-  createRoom: (gmPlayerName: string) =>
-    request<{ room: RoomSummary; gmPlayerId: string }>('POST', '/rooms', { gmPlayerName }),
+  createRoom: (gmPlayerName: string, maxTurns: number) =>
+    request<{ room: RoomSummary; gmPlayerId: string }>('POST', '/rooms', { gmPlayerName, settings: { maxTurns } }),
 
   joinRoom: (roomId: string, playerName: string) =>
     request<{ room: RoomSummary; playerId: string }>('POST', `/rooms/${roomId}/join`, { playerName }),
@@ -232,4 +227,7 @@ export const api = {
 
   resolveStoryTurn: (roomId: string, gmPlayerId: string) =>
     request<{ storyResult: unknown; storyProgress: unknown }>('POST', `/rooms/${roomId}/turns/story/resolve`, { gmPlayerId }),
+
+  resetRoom: (roomId: string, gmPlayerId: string) =>
+    request<{ message: string }>('POST', `/rooms/${roomId}/reset`, { gmPlayerId }),
 };

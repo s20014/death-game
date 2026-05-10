@@ -92,7 +92,6 @@ async function saveRoomToD1(room: Room, db: D1Database): Promise<void> {
       startedAt: room.createdAt,
       resolvedAt: room.createdAt,
     };
-    if (history.story !== undefined) historyTurn.story = history.story;
     if (history.result !== undefined) historyTurn.result = history.result;
     if (history.yesnoResult !== undefined) historyTurn.yesnoResult = history.yesnoResult;
     turnMap.set(history.turnNumber, historyTurn);
@@ -171,7 +170,6 @@ async function getRoomFromD1(roomId: string, db: D1Database): Promise<Room | und
         turnNumber: turn.turnNumber,
         mode: turn.mode,
       };
-      if (turn.story !== undefined) entry.story = turn.story;
       if (turn.result !== undefined) entry.result = turn.result;
       if (turn.yesnoResult !== undefined) entry.yesnoResult = turn.yesnoResult;
       return entry;
@@ -212,7 +210,7 @@ export async function createRoom(input: CreateRoomInput, db?: D1Database): Promi
   const room: Room = {
     id: roomId,
     gmPlayerId,
-    players: [{ id: gmPlayerId, name: input.gmPlayerName, money: 1_000_000, alive: true }],
+    players: [{ id: gmPlayerId, name: input.gmPlayerName, money: 0, alive: true }],
     settings: { ...DEFAULT_SETTINGS, ...input.settings },
     status: "waiting",
     turnHistory: [],
@@ -246,7 +244,7 @@ export async function joinRoom(
   const player: PlayerState = {
     id: crypto.randomUUID(),
     name: input.playerName,
-    money: 1_000_000,
+    money: 0,
     alive: true,
   };
   room.players.push(player);

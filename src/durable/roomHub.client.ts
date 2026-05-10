@@ -13,7 +13,8 @@ export type RoomEventType =
   | "story.first.submitted"
   | "story.others.started"
   | "story.others.submitted"
-  | "story.turn.resolved";
+  | "story.turn.resolved"
+  | "room.reset";
 
 export type RoomEvent = {
   type: RoomEventType;

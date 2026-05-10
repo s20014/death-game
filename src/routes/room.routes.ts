@@ -6,6 +6,7 @@ import {
   handleJoinRoom,
   handleLogState,
   handlePlayerState,
+  handleResetRoom,
   handleRoomWs,
 } from "../controllers/room.controller.js";
 import {
@@ -45,6 +46,7 @@ router.post("/:roomId/turns", handleStartTurn);
 router.post("/:roomId/turns/select", handleSubmitSelection);
 router.post("/:roomId/turns/resolve", handleResolveTurn);
 router.post("/:roomId/finalize", handleSetFinalization);
+router.post("/:roomId/reset", handleResetRoom);
 
 // YES/NO特殊イベント
 router.post("/:roomId/turns/yesno", handleTriggerYesNo);

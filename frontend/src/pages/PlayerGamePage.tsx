@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api, type TurnView, type TurnResultView, type YesNoResultView, type PlayerView, type StoryTurnView } from '../lib/api';
+import { ENDING_DATA } from '../lib/storyEndings';
 import { loadSession } from '../lib/session';
 import { connectRoomWs, type WsEvent } from '../lib/ws';
 
@@ -15,10 +16,10 @@ function AppBar({ stage, subtitle, dark = false }: { stage: string; subtitle?: s
     <div className="appbar">
       {dark ? (
         <div style={{ fontFamily: 'var(--font-display)', fontSize: 17, letterSpacing: '0.36em', color: '#1a1a2e' }}>
-          DEATH<span style={{ display: 'inline-block', width: 6, height: 6, background: '#1a1a2e', borderRadius: '50%', margin: '0 8px 2px', verticalAlign: 'middle' }} />GAME
+          MINORITY<span style={{ display: 'inline-block', width: 6, height: 6, background: '#1a1a2e', borderRadius: '50%', margin: '0 8px 2px', verticalAlign: 'middle' }} />MONEY
         </div>
       ) : (
-        <div className="brand">DEATH<span className="dot" />GAME</div>
+        <div className="brand">MINORITY<span className="dot" />MONEY</div>
       )}
       <div className="meta" style={dark ? { color: 'rgba(26,26,46,0.65)' } : undefined}>
         {stage}{subtitle ? ` / ${subtitle}` : ''}
@@ -91,7 +92,12 @@ function VotingScreen({
             >
               <div className="choice-letter">{LETTERS[idx] ?? String(idx + 1)}</div>
               <div>
-                <div className="choice-label">{c.text}</div>
+                {c.text && <div className="choice-label">{c.text}</div>}
+                {c.amount > 0 && (
+                  <div style={{ fontSize: 12, color: 'var(--green)', letterSpacing: '0.05em', marginTop: c.text ? 2 : 0, fontFamily: 'var(--font-display)' }}>
+                    +¥{c.amount.toLocaleString('ja-JP')}
+                  </div>
+                )}
               </div>
             </button>
           );
@@ -167,8 +173,12 @@ function ResultScreen({ turn, result, me }: { turn: TurnView; result: TurnResult
   const myEffect = result.applied.find((a) => a.playerId === me.id);
   const isWin = myEffect?.wasMinority ?? false;
   const choices = turn.choices ?? [];
+  const myChoice = choices.find((c) => c.id === turn.mySelection);
+  const resultStoryText = myChoice?.resultStory
+    ? (isWin ? myChoice.resultStory.minority : myChoice.resultStory.majority)
+    : null;
 
-  type DistItem = { letter: string; count: number; pct: number; mine: boolean; mino: boolean };
+  type DistItem = { letter: string; count: number; pct: number; mine: boolean };
   let distData: DistItem[] = [];
   if (result.mode === 'normal') {
     const r = result as TurnResultView;
@@ -178,7 +188,6 @@ function ResultScreen({ turn, result, me }: { turn: TurnView; result: TurnResult
       count: r.counts[c.id] ?? 0,
       pct: total > 0 ? ((r.counts[c.id] ?? 0) / total) * 100 : 0,
       mine: c.id === turn.mySelection,
-      mino: r.minorityChoiceIds.includes(c.id),
     }));
   }
 
@@ -195,10 +204,10 @@ function ResultScreen({ turn, result, me }: { turn: TurnView; result: TurnResult
             textShadow: isWin ? '0 0 28px rgba(240,192,64,0.5)' : '0 0 24px rgba(244,67,54,0.4)',
           }}
         >
-          {isWin ? '少数派' : '多数派'}
+          {isWin ? '賞金獲得' : '獲得なし'}
         </div>
         <div className="result-subline" style={{ color: isWin ? 'var(--gold-deep)' : 'rgba(244,67,54,0.85)' }}>
-          {isWin ? 'MINORITY · BONUS' : 'MAJORITY · PENALTY'}
+          {isWin ? 'MINORITY · WIN' : 'NO PAYOUT'}
         </div>
         {myEffect && (
           <div className="result-amount" style={{ color: isWin ? 'var(--gold)' : 'var(--red)' }}>
@@ -207,18 +216,11 @@ function ResultScreen({ turn, result, me }: { turn: TurnView; result: TurnResult
         )}
       </div>
 
-      {(() => {
-        const myChoice = choices.find((c) => c.id === turn.mySelection);
-        const story = myChoice?.resultStory
-          ? (isWin ? myChoice.resultStory.minority : myChoice.resultStory.majority)
-          : (!isWin ? '群れに紛れた者に、勝者の席は無い。' : null);
-        if (!story) return null;
-        return (
-          <div style={{ marginTop: 10, padding: '10px 12px', background: isWin ? 'rgba(240,192,64,0.06)' : 'rgba(244,67,54,0.06)', border: `1px dashed ${isWin ? 'rgba(240,192,64,0.4)' : 'rgba(244,67,54,0.4)'}`, borderRadius: 4, fontSize: 11.5, color: isWin ? 'rgba(240,210,120,0.9)' : 'rgba(255,200,200,0.9)', letterSpacing: '0.05em', fontFamily: 'var(--font-display)', lineHeight: 1.7, textAlign: 'center' }}>
-            {story}
-          </div>
-        );
-      })()}
+      {resultStoryText && (
+        <div style={{ marginTop: 10, padding: '10px 14px', background: isWin ? 'rgba(240,192,64,0.07)' : 'rgba(244,67,54,0.07)', border: `1px dashed ${isWin ? 'rgba(240,192,64,0.4)' : 'rgba(244,67,54,0.4)'}`, borderRadius: 4, fontSize: 12, color: isWin ? 'rgba(240,210,120,0.95)' : 'rgba(255,200,200,0.9)', lineHeight: 1.8, letterSpacing: '0.03em' }}>
+          {resultStoryText}
+        </div>
+      )}
 
       {distData.length > 0 && (
         <div className="dist-card">
@@ -355,7 +357,7 @@ function StoryFirstScreen({
             onClick={() => setSelected(c.id)}
             disabled={submitting}
           >
-            <div style={{ flex: 1 }}><div className="choice-label">{c.text}</div></div>
+            <div style={{ gridColumn: '1 / -1' }}><div className="choice-label">{c.text}</div></div>
           </button>
         ))}
       </div>
@@ -436,7 +438,7 @@ function StoryOthersScreen({
             onClick={() => setSelected(c.id)}
             disabled={submitting}
           >
-            <div style={{ flex: 1 }}>
+            <div style={{ gridColumn: '1 / -1' }}>
               <div className="choice-label">{c.text}</div>
               {c.moneyEffect && (
                 <div className="choice-effects">
@@ -463,23 +465,25 @@ function StoryOthersScreen({
 
 function StoryResolvedScreen({ me, storyTurn }: { me: PlayerView; storyTurn: StoryTurnView }) {
   const result = storyTurn.storyResult;
-  const myEffect = result?.applied.find((a) => a.playerId === me.id);
+  const ending = result?.ending;
+  const data = ending ? ENDING_DATA[ending] : null;
+  const bodyText = data?.body(result?.betrayerNames ?? []) ?? '';
 
   return (
     <div className="page-content">
-      <MoneyPanel money={myEffect?.moneyAfter ?? me.money} delta={myEffect?.totalDelta} />
-      <div className="result-panel" style={{ borderColor: 'rgba(240,192,64,0.4)' }}>
-        <div className="kicker" style={{ color: 'var(--gold)' }}>ストーリー結果</div>
-        {myEffect && (
-          <div className="result-amount" style={{ color: myEffect.totalDelta >= 0 ? 'var(--green)' : 'var(--red)' }}>
-            {myEffect.totalDelta >= 0 ? '+' : '−'}¥{Math.abs(myEffect.totalDelta).toLocaleString('ja-JP')}
+      <MoneyPanel money={me.money} />
+      {data && (
+        <div className="result-panel" style={{ borderColor: data.color, gap: 8 }}>
+          <div className="kicker" style={{ color: data.color }}>ENDING</div>
+          <div className="result-headline" style={{ color: data.color, fontSize: 18, textShadow: `0 0 24px ${data.color}88` }}>
+            {data.title}
           </div>
-        )}
-        {!myEffect && <div style={{ marginTop: 8, fontSize: 13, color: 'var(--ink-mute)' }}>影響なし</div>}
-        {myEffect?.bankrupt && (
-          <div style={{ marginTop: 8, fontSize: 12, color: 'var(--red)', letterSpacing: '0.2em' }}>BANKRUPT</div>
-        )}
-      </div>
+          <div style={{ fontSize: 11, color: data.color, opacity: 0.7, letterSpacing: '0.15em' }}>{data.sub(result?.betrayerNames ?? [])}</div>
+          <div style={{ marginTop: 12, fontSize: 12, color: 'var(--ink-mute)', lineHeight: 1.9, whiteSpace: 'pre-line', textAlign: 'left' }}>
+            {bodyText}
+          </div>
+        </div>
+      )}
       <div style={{ flex: 1 }} />
     </div>
   );
@@ -593,7 +597,6 @@ export default function PlayerGamePage() {
       setMe(stateData.me);
       setCurrentTurn(stateData.currentTurn);
       setAllPlayers(roomData.players);
-      if (stateData.room.status === 'finished') navigate(`/room/${roomId}/log`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'エラーが発生しました');
     }
@@ -614,9 +617,12 @@ export default function PlayerGamePage() {
         setSelected(null);
         void fetchState();
       }
+      if (event.type === 'room.reset') {
+        navigate(`/room/${roomId}/waiting`);
+      }
     });
     return disconnect;
-  }, [roomId, fetchState]);
+  }, [roomId, fetchState, navigate]);
 
   async function handleSelect(choiceId: string) {
     if (!roomId || !session?.playerId || submitting) return;

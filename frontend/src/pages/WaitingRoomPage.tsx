@@ -1,38 +1,25 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import QRCode from 'qrcode';
 import { api, type RoomDetail } from '../lib/api';
 import { loadSession } from '../lib/session';
 import { connectRoomWs, type WsEvent } from '../lib/ws';
 
 type Tab = 'code' | 'qr' | 'url';
 
-function QRPlaceholder() {
-  const N = 21;
-  const seed = (i: number, j: number) => ((i * 53 + j * 97 + i * j * 11) ^ 0x33) & 1;
-  const cells: React.ReactElement[] = [];
-  for (let i = 0; i < N; i++) {
-    for (let j = 0; j < N; j++) {
-      const inFinder = (i < 7 && j < 7) || (i < 7 && j >= N - 7) || (i >= N - 7 && j < 7);
-      if (inFinder) continue;
-      if (seed(i, j)) cells.push(<rect key={`${i}-${j}`} x={j} y={i} width="1" height="1" fill="#0a0b1a" />);
-    }
-  }
-  const finder = (x: number, y: number, key: string) => (
-    <g key={key} transform={`translate(${x},${y})`}>
-      <rect width="7" height="7" fill="#0a0b1a" />
-      <rect x="1" y="1" width="5" height="5" fill="#f0c040" />
-      <rect x="2" y="2" width="3" height="3" fill="#0a0b1a" />
-    </g>
-  );
-  return (
-    <svg viewBox={`0 0 ${N} ${N}`} style={{ width: '100%', height: '100%', display: 'block' }}>
-      <rect width={N} height={N} fill="#f0c040" />
-      {cells}
-      {finder(0, 0, 'f1')}
-      {finder(N - 7, 0, 'f2')}
-      {finder(0, N - 7, 'f3')}
-    </svg>
-  );
+function QRImage({ url }: { url: string }) {
+  const [dataUrl, setDataUrl] = useState('');
+
+  useEffect(() => {
+    QRCode.toDataURL(url, {
+      width: 300,
+      margin: 2,
+      color: { dark: '#0a0b1a', light: '#f0c040' },
+    }).then(setDataUrl).catch(console.error);
+  }, [url]);
+
+  if (!dataUrl) return <div style={{ width: '100%', aspectRatio: '1', background: 'rgba(240,192,64,0.1)' }} />;
+  return <img src={dataUrl} alt="QR Code" style={{ width: '100%', height: '100%', display: 'block' }} />;
 }
 
 export default function WaitingRoomPage() {
@@ -82,7 +69,7 @@ export default function WaitingRoomPage() {
   if (error) return (
     <div className="waiting-page">
       <div className="appbar" style={{ paddingTop: 18 }}>
-        <div className="brand">DEATH<span className="dot" />GAME</div>
+        <div className="brand">MINORITY<span className="dot" />MONEY</div>
       </div>
       <div style={{ padding: '0 22px' }}><p className="error-msg">{error}</p></div>
     </div>
@@ -91,19 +78,19 @@ export default function WaitingRoomPage() {
   if (!room) return (
     <div className="waiting-page">
       <div className="appbar" style={{ paddingTop: 18 }}>
-        <div className="brand">DEATH<span className="dot" />GAME</div>
+        <div className="brand">MINORITY<span className="dot" />MONEY</div>
         <div className="meta">WAITING ROOM</div>
       </div>
       <div style={{ padding: '0 22px' }}><span className="kicker">読み込み中…</span></div>
     </div>
   );
 
-  const roomUrl = `${window.location.host}/join`;
+  const joinUrl = `${window.location.origin}/join?roomId=${room.id}`;
 
   return (
     <div className="waiting-page">
       <div className="appbar" style={{ paddingTop: 18 }}>
-        <div className="brand">DEATH<span className="dot" />GAME</div>
+        <div className="brand">MINORITY<span className="dot" />MONEY</div>
         <div className="meta">ROOM / OPEN · {room.players.length} IN</div>
       </div>
 
@@ -131,7 +118,7 @@ export default function WaitingRoomPage() {
           {tab === 'qr' && (
             <>
               <div className="kicker">SCAN TO JOIN</div>
-              <div className="qr-wrapper"><QRPlaceholder /></div>
+              <div className="qr-wrapper"><QRImage url={joinUrl} /></div>
               <div style={{ marginTop: 8, fontSize: 9, color: 'var(--ink-faint)', letterSpacing: '0.3em' }}>
                 カメラで読み取り
               </div>
@@ -140,7 +127,7 @@ export default function WaitingRoomPage() {
           {tab === 'url' && (
             <>
               <div className="kicker">ROOM URL</div>
-              <div className="url-box">{roomUrl}<br />ID: {room.id}</div>
+              <div className="url-box" style={{ wordBreak: 'break-all', fontSize: 11 }}>{joinUrl}</div>
               <div style={{ marginTop: 8, fontSize: 9, color: 'var(--ink-faint)', letterSpacing: '0.3em' }}>
                 タップで開く
               </div>
